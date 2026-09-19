@@ -99,12 +99,26 @@ export function createGameEndpoints(http: HttpClient, decorationsMock?: ApiRoomD
     removeConstructionSite: (room, ids, shard) => http.request('POST', '/api/game/add-object-intent', withShard({ _id: 'room', room, name: 'removeConstructionSite', intent: ids.map(id => ({ id, roomName: room })) }, shard)),
     addObjectIntent: (id, room, name, intent, shard) => http.request('POST', '/api/game/add-object-intent', withShard({ _id: id, room, name, intent }, shard)),
     addGlobalIntent: (name, intent, shard) => http.request('POST', '/api/game/add-global-intent', withShard({ name, intent }, shard)),
-    roomHistory: (room, time, shard) =>
+    roomHistory: (room, time, shard) => {
       // silent: a missing chunk 404s while history is still being written; the caller
       // handles that gracefully, so don't surface a global "request failed" toast.
-      shard
-        ? http.request('GET', `/room-history/${encodeURIComponent(shard)}/${encodeURIComponent(room)}/${time}.json`, undefined, { silent: true })
-        : http.request('GET', '/room-history', { room, time }, { silent: true }),
+      if (!shard) return http.request('GET', '/room-history', { room, time }, { silent: true })
+
+      const officialUrl = `/room-history/${encodeURIComponent(shard)}/${encodeURIComponent(room)}/${time}.json`
+      return http.request('GET', officialUrl, undefined, { silent: true })
+        .catch((err: unknown) => {
+          // Some private-server engines (screeps-launcher included) report a shard via
+          // /api/version but never adopt the shard-prefixed room-history convention official
+          // multi-shard servers use — screepsmod-history's route is a query-string API
+          // (/room-history?room=&time=), so this path never reaches its request parser and
+          // comes back as a 500, not a 404. A true "chunk not found" on an official server
+          // already surfaces as 404, which the caller (HistoryPlayer) treats as "try the
+          // previous chunk" — leave that path alone rather than doubling every such request.
+          const status = (err as { status?: number } | null)?.status
+          if (status === 404) throw err
+          return http.request('GET', '/room-history', { room, time }, { silent: true })
+        })
+    },
     setNotifyWhenAttacked: (id, enabled, shard) => http.request('POST', '/api/game/set-notify-when-attacked', withShard({ _id: id, enabled }, shard)),
     createInvader: (room, x, y, size, type, boosted, shard) => http.request('POST', '/api/game/create-invader', withShard({ room, x, y, size, type, ...(boosted != null ? { boosted } : {}) }, shard)),
     removeInvader: (id, shard) => http.request('POST', '/api/game/remove-invader', withShard({ _id: id }, shard)),

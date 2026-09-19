@@ -285,4 +285,41 @@ describe('game endpoints', () => {
     expect(url).toContain('time=1000')
     expect(res.base).toBe(1000)
   })
+
+  it('roomHistory propagates a 404 from the path URL without falling back (official server, missing chunk)', async () => {
+    fetchMock.mockResolvedValue(mockResponse({ error: 'not found' }, { status: 404 }))
+    const http = new HttpClient({ url: 'http://test.local', auth: new TokenAuth({ token: 't' }) })
+
+    await expect(http.game.roomHistory('W1N1', 1000, 'shard0')).rejects.toMatchObject({ status: 404 })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('roomHistory falls back to query params when the path URL fails with something other than 404 (private server reporting a shard)', async () => {
+    const chunk = { timestamp: 1000, room: 'W1N1', base: 1000, ticks: {} }
+    fetchMock
+      .mockResolvedValueOnce(mockResponse({}, { status: 500 }))
+      .mockResolvedValueOnce(mockResponse(chunk))
+    const http = new HttpClient({ url: 'http://test.local', auth: new TokenAuth({ token: 't' }) })
+
+    const res = await http.game.roomHistory('W1N1', 1000, 'shard0')
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const [firstUrl] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const [secondUrl] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(firstUrl).toBe('http://test.local/room-history/shard0/W1N1/1000.json')
+    expect(secondUrl).toMatch(/\/room-history\?/)
+    expect(secondUrl).toContain('room=W1N1')
+    expect(secondUrl).toContain('time=1000')
+    expect(res.base).toBe(1000)
+  })
+
+  it('roomHistory propagates the fallback error when both the path and query URLs fail', async () => {
+    fetchMock
+      .mockResolvedValueOnce(mockResponse({}, { status: 500 }))
+      .mockResolvedValueOnce(mockResponse({ error: 'no_record' }, { status: 404 }))
+    const http = new HttpClient({ url: 'http://test.local', auth: new TokenAuth({ token: 't' }) })
+
+    await expect(http.game.roomHistory('W1N1', 1000, 'shard0')).rejects.toMatchObject({ status: 404 })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
 })
