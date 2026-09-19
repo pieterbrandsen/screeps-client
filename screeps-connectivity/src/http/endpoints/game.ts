@@ -102,10 +102,10 @@ export function createGameEndpoints(http: HttpClient, decorationsMock?: ApiRoomD
     roomHistory: (room, time, shard) => {
       // silent: a missing chunk 404s while history is still being written; the caller
       // handles that gracefully, so don't surface a global "request failed" toast.
-      if (!shard) return http.request('GET', '/room-history', { room, time }, { silent: true })
+      if (!shard) return http.request<RoomHistoryChunk>('GET', '/room-history', { room, time }, { silent: true })
 
       const officialUrl = `/room-history/${encodeURIComponent(shard)}/${encodeURIComponent(room)}/${time}.json`
-      return http.request('GET', officialUrl, undefined, { silent: true })
+      return http.request<RoomHistoryChunk>('GET', officialUrl, undefined, { silent: true })
         .catch((err: unknown) => {
           // Some private-server engines (screeps-launcher included) report a shard via
           // /api/version but never adopt the shard-prefixed room-history convention official
@@ -116,7 +116,7 @@ export function createGameEndpoints(http: HttpClient, decorationsMock?: ApiRoomD
           // previous chunk" — leave that path alone rather than doubling every such request.
           const status = (err as { status?: number } | null)?.status
           if (status === 404) throw err
-          return http.request('GET', '/room-history', { room, time }, { silent: true })
+          return http.request<RoomHistoryChunk>('GET', '/room-history', { room, time }, { silent: true })
         })
     },
     setNotifyWhenAttacked: (id, enabled, shard) => http.request('POST', '/api/game/set-notify-when-attacked', withShard({ _id: id, enabled }, shard)),
