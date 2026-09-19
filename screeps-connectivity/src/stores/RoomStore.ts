@@ -196,13 +196,25 @@ export class RoomStore extends TypedStore<RoomStoreEvents> {
     const errChannel = shard ? `err@room:${shard}/${room}` : `err@room:${room}`
     const socketSub = this.socket.subscribe(channel)
 
+    // Some private-server engines report a shard name via /api/version — so `shard` here is
+    // never null — but never prefix their pub/sub channels with it: that convention predates
+    // official multi-shard servers, which this client otherwise targets exclusively. Rather
+    // than require every consumer to already know which convention a given server speaks,
+    // also subscribe to the unprefixed form whenever a shard is given. A server that *does*
+    // shard-prefix its channels simply never publishes anything on the legacy one, so this
+    // costs one permanently idle subscription there and nothing else. Confirmed against a
+    // live screeps-launcher private server: `room:shard/W5N9` never received a message,
+    // `room:W5N9` returned full live room data immediately.
+    const legacyChannel = shard ? `room:${room}` : null
+    const legacySocketSub = legacyChannel ? this.socket.subscribe(legacyChannel) : null
+
     const errListenerSub = this.socket.on(errChannel, (data) => {
       const msg = typeof data === 'string' ? data : JSON.stringify(data)
       this.logger.log('room error', room, shard, msg)
       this.emit('room:error', { room, shard, message: msg })
     })
 
-    const listenerSub = this.socket.on(channel, (data) => {
+    const handleUpdate = (data: unknown) => {
       const update = data as { objects?: RoomObjectDiff | null; gameTime?: number; visual?: string; flags?: string; users?: Record<string, { _id: string; username: string; badge?: Badge }>; decorations?: ApiRoomDecorationItem[] }
       const current: RoomObjectMap = { ...(this.roomObjects.get(mapKey) ?? {}) }
 
@@ -283,12 +295,17 @@ export class RoomStore extends TypedStore<RoomStoreEvents> {
       this.roomObjects.set(mapKey, current)
       const users = this.roomUsers.get(mapKey)
       this.emit('room:update', { room, shard, gameTime: update.gameTime, objects: current, diff, visual: update.visual ?? '', users })
-    })
+    }
+
+    const listenerSub = this.socket.on(channel, handleUpdate)
+    const legacyListenerSub = legacyChannel ? this.socket.on(legacyChannel, handleUpdate) : null
 
     return {
       dispose: () => {
         socketSub.dispose()
+        legacySocketSub?.dispose()
         listenerSub.dispose()
+        legacyListenerSub?.dispose()
         errListenerSub.dispose()
         const remaining = (this.roomSubCount.get(mapKey) ?? 1) - 1
         if (remaining <= 0) {

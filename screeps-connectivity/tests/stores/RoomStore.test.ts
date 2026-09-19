@@ -56,6 +56,61 @@ describe('RoomStore', () => {
     expect(socket.subscribe).toHaveBeenCalledWith('room:E9N3')
   })
 
+  // A screeps-launcher private server reports a shard name via /api/version - so `shard` here
+  // is never null - but its pub/sub channels predate shard prefixing and are never published
+  // under it. Confirmed live: `room:shard/W5N9` never received a message where `room:W5N9`
+  // returned full room data immediately. See RoomStore.ts's `legacyChannel` for the fix.
+  it('also subscribes the unprefixed legacy channel when a shard is given', () => {
+    const { store, socket } = makeStore()
+    store.subscribe('W5N9', 'shard')
+    expect(socket.subscribe).toHaveBeenCalledWith('room:shard/W5N9')
+    expect(socket.subscribe).toHaveBeenCalledWith('room:W5N9')
+    expect(socket.subscribe).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not add a legacy channel when shard is already null - there is nothing to fall back from', () => {
+    const { store, socket } = makeStore()
+    store.subscribe('E9N3', null)
+    expect(socket.subscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('processes a room update that arrives on the legacy channel exactly like one on the primary channel', () => {
+    const { store, socket } = makeStore()
+    const handlers = new Map<string, (data: unknown) => void>()
+    ;(socket.on as ReturnType<typeof vi.fn>).mockImplementation((channel: string, cb: (data: unknown) => void) => {
+      handlers.set(channel, cb)
+      return { dispose: vi.fn() }
+    })
+
+    store.subscribe('W5N9', 'shard')
+    expect(handlers.has('room:shard/W5N9')).toBe(true)
+    expect(handlers.has('room:W5N9')).toBe(true)
+
+    // The server that only speaks the legacy convention - never publishes on the primary channel.
+    handlers.get('room:W5N9')!({
+      objects: { c1: { _id: 'c1', type: 'controller', room: 'W5N9', x: 34, y: 14, level: 8 } },
+      gameTime: 991672,
+    })
+
+    expect(store.objects('W5N9', 'shard')).toMatchObject({ c1: { type: 'controller', level: 8 } })
+  })
+
+  it('dispose() unsubscribes both the primary and the legacy channel', () => {
+    const { store, socket } = makeStore()
+    const socketSubDisposes: ReturnType<typeof vi.fn>[] = []
+    ;(socket.subscribe as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      const dispose = vi.fn()
+      socketSubDisposes.push(dispose)
+      return { dispose }
+    })
+
+    const sub = store.subscribe('W5N9', 'shard')
+    expect(socketSubDisposes).toHaveLength(2)
+
+    sub.dispose()
+    for (const dispose of socketSubDisposes) expect(dispose).toHaveBeenCalledOnce()
+  })
+
   it('subscribe() returns a Subscription with dispose()', () => {
     const { store } = makeStore()
     const sub = store.subscribe('W7N7', 'shard0')
