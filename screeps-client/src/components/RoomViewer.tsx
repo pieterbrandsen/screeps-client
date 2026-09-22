@@ -289,6 +289,7 @@ export function RoomViewer(props: RoomViewerProps) {
     })
 
     const group = new SubscriptionGroup()
+    let cancelled = false
 
     group.add(c.stores.room.subscribe(room, shard))
     group.add(c.stores.room.on('room:error', (data) => {
@@ -356,7 +357,21 @@ export function RoomViewer(props: RoomViewerProps) {
       })
     }))
 
+    // The engine may be paused (e.g. screepsmod-lockstep holding the tick loop), in
+    // which case room:update never fires and gameTime() stays null forever — which
+    // also leaves the History button permanently disabled, since it gates on gameTime.
+    // Seed it from the HTTP time endpoint, which reads storage directly instead of
+    // riding the tick loop, so it resolves whether or not the world is ticking.
+    // The `prev ?? res.time` guard means a room:update that lands first always wins.
+    c.http.game.time(shard)
+      .then((res) => {
+        if (cancelled) return
+        setGameTime((prev) => prev ?? res.time)
+      })
+      .catch((err) => log(`time fetch failed for ${room}: ${err}`))
+
     onCleanup(() => {
+      cancelled = true
       log(`leaving ${room}`)
       group.dispose()
     })
