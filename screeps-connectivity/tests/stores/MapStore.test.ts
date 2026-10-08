@@ -25,6 +25,29 @@ describe('MapStore', () => {
     const { store, socket } = makeStore()
     store.subscribeMap2('E9N3', null)
     expect(socket.subscribe).toHaveBeenCalledWith('roomMap2:E9N3')
+    // Nothing to fall back from: exactly one subscription.
+    expect(socket.subscribe).toHaveBeenCalledOnce()
+  })
+
+  it('subscribeMap2() with a shard also subscribes the unprefixed channel a private server publishes on', () => {
+    // A screeps-launcher server reports a shard via /api/version but serves only roomMap2:<room>
+    // (@screeps/backend socket/map.js matches /^roomMap2:([a-zA-Z0-9_-]+)$/), as with room:<room>.
+    const { store, socket } = makeStore()
+    store.subscribeMap2('W7N7', 'shard')
+    expect((socket.subscribe as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0])).toEqual(['roomMap2:shard/W7N7', 'roomMap2:W7N7'])
+  })
+
+  it('processes data arriving on the unprefixed channel exactly like the prefixed one', () => {
+    const { store, socket } = makeStore()
+    const events: Array<{ room: string; shard: string | null; source: string }> = []
+    store.on('room:map2update', e => events.push(e))
+    store.subscribeMap2('W7N7', 'shard')
+    const legacy = (socket.on as ReturnType<typeof vi.fn>).mock.calls.find(c => c[0] === 'roomMap2:W7N7')
+    expect(legacy).toBeDefined()
+    const data: RoomMap2Data = { w: [[1, 2]] }
+    legacy![1](data)
+    expect(events).toEqual([{ room: 'W7N7', shard: 'shard', data, source: 'live' }])
+    expect(store.map2data('W7N7', 'shard')).toEqual(data)
   })
 
   it('subscribeMap2() returns a Subscription with dispose()', () => {
@@ -125,9 +148,8 @@ describe('MapStore', () => {
     const { store, socket } = makeStore()
     store.subscribeMap2('W7N7', 'shard0')
     store.subscribeMap2('W7N7', 'shard0')
-    // MapStore opens exactly one socket subscription per key; second call reuses it
-    expect(socket.subscribe).toHaveBeenCalledOnce()
-    expect(socket.subscribe).toHaveBeenCalledWith('roomMap2:shard0/W7N7')
+    // MapStore opens one socket subscription per channel per key; the second call reuses them
+    expect((socket.subscribe as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0])).toEqual(['roomMap2:shard0/W7N7', 'roomMap2:W7N7'])
   })
 
   it('dispose() when last ref is released, closes the socket subscription', () => {
@@ -143,7 +165,7 @@ describe('MapStore', () => {
     expect(socketDispose).not.toHaveBeenCalled()  // refCount still 1
 
     sub2.dispose()
-    expect(socketDispose).toHaveBeenCalledOnce()  // last ref gone, socket cleaned up
+    expect(socketDispose).toHaveBeenCalledTimes(2)  // last ref gone: the prefixed and the unprefixed channel
   })
 
   it('map2data() returns data after first message arrives', () => {
@@ -303,12 +325,11 @@ describe('MapStore — subscription limit + waitlist', () => {
     const sub1 = store.subscribeMap2('W1N1', 'shard0')   // active, socket.subscribe #1
     store.subscribeMap2('W7N7', 'shard0')                // pending, no socket.subscribe
 
-    expect(socket.subscribe).toHaveBeenCalledOnce()  // only W1N1 subscribed so far
+    expect(socket.subscribe).toHaveBeenCalledTimes(2)  // only W1N1 subscribed so far, prefixed and unprefixed
 
     sub1.dispose()  // promotes W7N7
 
-    expect(socket.subscribe).toHaveBeenCalledTimes(2)
-    expect(socket.subscribe).toHaveBeenLastCalledWith('roomMap2:shard0/W7N7')
+    expect((socket.subscribe as ReturnType<typeof vi.fn>).mock.calls.slice(2).map(c => c[0])).toEqual(['roomMap2:shard0/W7N7', 'roomMap2:W7N7'])
   })
 
   it('live data arrives for promoted room after promotion', () => {

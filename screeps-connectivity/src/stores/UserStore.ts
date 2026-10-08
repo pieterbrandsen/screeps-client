@@ -228,8 +228,7 @@ export class UserStore extends TypedStore<UserStoreEvents> {
 
   subscribeMapVisual(shard: string | null): Subscription {
     this.logger.log('subscribe mapVisual', shard)
-    let socketSub: Subscription | null = null
-    let listenerSub: Subscription | null = null
+    const subs: Subscription[] = []
     let disposed = false
 
     const setup = async () => {
@@ -237,11 +236,16 @@ export class UserStore extends TypedStore<UserStoreEvents> {
         const uid = this._userId ?? (await this.me())._id
         if (disposed) return
         // Official multi-shard servers use mapVisual:${uid}/${shard}; unofficial use mapVisual:${uid}.
-        const fullChannel = shard ? `mapVisual:${uid}/${shard}` : `mapVisual:${uid}`
-        socketSub = this.socket.subscribe(fullChannel)
-        listenerSub = this.socket.on(fullChannel, (data) => {
-          this.emit('user:mapVisual', { shard, data: typeof data === 'string' ? data : '' })
-        })
+        // A screeps-launcher server reports a shard yet speaks the unofficial form (@screeps/backend
+        // socket/user.js takes everything after the colon as the user id), so with a shard both are
+        // subscribed, as RoomStore does for room:<room>.
+        const channels = shard ? [`mapVisual:${uid}/${shard}`, `mapVisual:${uid}`] : [`mapVisual:${uid}`]
+        for (const channel of channels) {
+          subs.push(this.socket.subscribe(channel))
+          subs.push(this.socket.on(channel, (data) => {
+            this.emit('user:mapVisual', { shard, data: typeof data === 'string' ? data : '' })
+          }))
+        }
       } catch (err) {
         if (!disposed) {
           this.dispatchEvent(new ErrorEvent('error', { error: err instanceof Error ? err : new Error(String(err)) }))
@@ -255,8 +259,7 @@ export class UserStore extends TypedStore<UserStoreEvents> {
       dispose: () => {
         this.logger.log('unsubscribe mapVisual', shard)
         disposed = true
-        socketSub?.dispose()
-        listenerSub?.dispose()
+        for (const sub of subs) sub.dispose()
       },
     }
   }

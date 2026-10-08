@@ -36,6 +36,8 @@ interface ActiveEntry {
   refCount: number
   socketSub: Subscription
   listenerSub: Subscription
+  /** The unprefixed channel's subscription and listener, opened alongside whenever a shard is given. */
+  legacySubs: Subscription[]
   /** Canonical hash of the last data we emitted/stored. null until first message or cache-warm init. */
   lastHash: string | null
 }
@@ -125,6 +127,11 @@ export class MapStore extends TypedStore<MapStoreEvents> {
   private activateKey(room: string, shard: string | null, mapKey: string, refCount: number): void {
     const channel = shard ? `roomMap2:${shard}/${room}` : `roomMap2:${room}`
     const socketSub = this.socket.subscribe(channel)
+    // A screeps-launcher private server reports a shard via /api/version but serves map tiles only
+    // on roomMap2:<room> (@screeps/backend socket/map.js), as RoomStore found for room:<room>. Also
+    // subscribe the unprefixed form whenever a shard is given; a server that shard-prefixes its
+    // channels never publishes on it, which costs one idle subscription per room there.
+    const legacyChannel = shard ? `roomMap2:${room}` : null
     const cached = this.storage.getMemory(room, shard)
     const entry: ActiveEntry = {
       room,
@@ -132,16 +139,21 @@ export class MapStore extends TypedStore<MapStoreEvents> {
       refCount,
       socketSub,
       listenerSub: undefined as unknown as Subscription,
+      legacySubs: [],
       lastHash: cached ? canonicalize(cached) : null,
     }
-    entry.listenerSub = this.socket.on(channel, (data) => {
+    const handleUpdate = (data: unknown) => {
       const next = data as RoomMap2Data
       const nextHash = canonicalize(next)
       if (entry.lastHash === nextHash) return
       entry.lastHash = nextHash
       void this.storage.put(room, shard, next)
       this.emit('room:map2update', { room, shard, data: next, source: 'live' })
-    })
+    }
+    entry.listenerSub = this.socket.on(channel, handleUpdate)
+    if (legacyChannel) {
+      entry.legacySubs = [this.socket.subscribe(legacyChannel), this.socket.on(legacyChannel, handleUpdate)]
+    }
     this.active.set(mapKey, entry)
   }
 
@@ -210,6 +222,7 @@ export class MapStore extends TypedStore<MapStoreEvents> {
     if (active.refCount <= 0) {
       active.socketSub.dispose()
       active.listenerSub.dispose()
+      for (const sub of active.legacySubs) sub.dispose()
       this.active.delete(mapKey)
       this.keyStates.delete(mapKey)
       this.logger.log('unsubscribeMap2', room, shard, '(deactivated, promoting next)')

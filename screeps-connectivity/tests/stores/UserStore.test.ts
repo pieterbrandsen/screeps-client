@@ -179,3 +179,40 @@ describe('UserStore', () => {
     expect(mockDispose).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('UserStore.subscribeMapVisual', () => {
+  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+
+  it('with a shard, also subscribes the unprefixed channel a private server publishes on', async () => {
+    // @screeps/backend socket/user.js reads mapVisual:<id> and treats anything after the colon as
+    // the user id, so mapVisual:<id>/<shard> is refused there; it publishes on mapVisual:<id>.
+    const { store, socket } = makeStore()
+    store.subscribeMapVisual('shard')
+    await flush()
+    expect((socket.subscribe as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0])).toEqual(['mapVisual:uid1/shard', 'mapVisual:uid1'])
+  })
+
+  it('emits a visual arriving on either channel, and closes both on dispose', async () => {
+    const { store, socket } = makeStore()
+    const dispose = vi.fn()
+    ;(socket.subscribe as ReturnType<typeof vi.fn>).mockReturnValue({ dispose })
+    ;(socket.on as ReturnType<typeof vi.fn>).mockReturnValue({ dispose })
+    const events: Array<{ shard: string | null; data: string }> = []
+    store.on('user:mapVisual', e => events.push(e))
+    const sub = store.subscribeMapVisual('shard')
+    await flush()
+    const handler = (channel: string) => (socket.on as ReturnType<typeof vi.fn>).mock.calls.find(c => c[0] === channel)![1]
+    handler('mapVisual:uid1')('{"t":"c"}')
+    handler('mapVisual:uid1/shard')('{"t":"r"}')
+    expect(events).toEqual([{ shard: 'shard', data: '{"t":"c"}' }, { shard: 'shard', data: '{"t":"r"}' }])
+    sub.dispose()
+    expect(dispose).toHaveBeenCalledTimes(4)
+  })
+
+  it('without a shard subscribes the one channel', async () => {
+    const { store, socket } = makeStore()
+    store.subscribeMapVisual(null)
+    await flush()
+    expect((socket.subscribe as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0])).toEqual(['mapVisual:uid1'])
+  })
+})
