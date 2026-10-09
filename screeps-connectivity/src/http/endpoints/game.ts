@@ -76,7 +76,13 @@ export function createGameEndpoints(http: HttpClient, decorationsMock?: ApiRoomD
     roomObjects: (room, shard) => http.request('GET', '/api/game/room-objects', withShard({ room }, shard)),
     roomDecorations: decorationsMock
       ? () => Promise.resolve(decorationsMock)
-      : (room, shard) => http.request('GET', '/api/game/room-decorations', withShard({ room }, shard)),
+      : (room, shard) => http.request<ApiRoomDecorationsResponse>('GET', '/api/game/room-decorations', withShard({ room }, shard), { silent: true })
+        // Decorations are an official-server feature: a private server (screeps-launcher's
+        // backend) has no such endpoint and answers 404, which means "no decorations", not a failure.
+        .catch((err: unknown) => {
+          if ((err as { status?: number }).status === 404) return { ok: 1, decorations: [] }
+          throw err
+        }),
     roomStatus: (room, shard) => http.request('GET', '/api/game/room-status', withShard({ room }, shard)),
     roomOverview: (room, interval = 8, shard) => http.request('GET', '/api/game/room-overview', withShard({ room, interval }, shard)),
     time: (shard) => http.request('GET', '/api/game/time', withShard({}, shard)),

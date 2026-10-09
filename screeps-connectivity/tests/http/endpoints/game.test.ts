@@ -322,4 +322,23 @@ describe('game endpoints', () => {
     await expect(http.game.roomHistory('W1N1', 1000, 'shard0')).rejects.toMatchObject({ status: 404 })
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
+
+  it('roomDecorations reads a 404 as no decorations, without an error event (a private server has no such endpoint)', async () => {
+    // screeps-launcher's backend has no /api/game/room-decorations: every room view reported
+    // "Request failed: GET /api/game/room-decorations - HTTP 404".
+    fetchMock.mockResolvedValue(new Response('Cannot GET /api/game/room-decorations', { status: 404 }))
+    const http = new HttpClient({ url: 'http://test.local', auth: new TokenAuth({ token: 't' }) })
+    const errors: Array<{ silent?: boolean }> = []
+    http.on('http:error', e => errors.push(e))
+
+    await expect(http.game.roomDecorations('W1N1', 'shard')).resolves.toEqual({ ok: 1, decorations: [] })
+    expect(errors.every(e => e.silent)).toBe(true)
+  })
+
+  it('roomDecorations still fails on any other error', async () => {
+    fetchMock.mockResolvedValue(mockResponse({}, { status: 500 }))
+    const http = new HttpClient({ url: 'http://test.local', auth: new TokenAuth({ token: 't' }) })
+
+    await expect(http.game.roomDecorations('W1N1', 'shard')).rejects.toMatchObject({ status: 500 })
+  })
 })
