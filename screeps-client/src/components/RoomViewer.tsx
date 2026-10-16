@@ -264,6 +264,8 @@ export function RoomViewer(props: RoomViewerProps) {
     onCleanup(() => sub.dispose())
   })
 
+  let lastTimeShard = untrack(() => props.shard)
+
   // Subscribe to room data as soon as client is ready (no renderer dependency to avoid
   // a race where PixiJS init finishes after the initial room state arrives)
   createEffect(() => {
@@ -274,10 +276,15 @@ export function RoomViewer(props: RoomViewerProps) {
     const shard = props.shard
 
     log(`navigate → ${room} (shard=${shard ?? 'default'})`)
+    // Game time is per shard, not per room: keep it across room changes so the History
+    // button doesn't go disabled while the seed request below is in flight (or if it fails
+    // on a paused engine, where no room:update arrives to refill it).
+    const shardChanged = shard !== lastTimeShard
+    lastTimeShard = shard
     batch(() => {
       setObjectState(null)
       setVisualState('')
-      setGameTime(null)
+      if (shardChanged) setGameTime(null)
       clearSelection()
       setRoomObjectCount(null)
       setRoomOwner(null)

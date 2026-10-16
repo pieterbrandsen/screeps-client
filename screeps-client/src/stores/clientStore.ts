@@ -301,6 +301,12 @@ export async function connect(opts: {
     setClient(screepsClient)
     setStatus('connected')
     log(`connected to ${opts.url}`)
+    // A paused engine never sends room:update, so nothing else would ever set gameTime
+    // and the History button would stay disabled. Seed it once from the HTTP time
+    // endpoint (it reads storage, not the tick loop); a socket update that lands first wins.
+    void screepsClient.http.game.time()
+      .then((res) => setGameTime((prev) => prev ?? res.time))
+      .catch((err) => log(`initial time fetch failed: ${err}`))
     setSession(SS.url, opts.url)
     const resolvedAuthMethod = opts.authMethod ?? opts.auth
     setAuthMethod(resolvedAuthMethod)
